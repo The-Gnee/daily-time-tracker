@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#152e28">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Daily Time Tracker</title>
+<style>
+*{box-sizing:border-box}body{margin:0 auto;padding:24px 18px;max-width:570px;background:#f4f6f2;color:#152e28;font:16px system-ui,sans-serif}h1{font-size:28px;margin:8px 0}h2{font-size:20px}section,details{background:white;border-radius:16px;padding:16px;margin:12px 0}button,input,select{font:inherit;min-height:44px;padding:8px;border:1px solid #aab9b0;border-radius:8px}button{background:#e6eee8;color:#152e28;cursor:pointer;margin:3px 0}button:disabled{opacity:.45}button.primary{background:#152e28;color:white}input,select{width:100%;margin:4px 0 10px}label{display:block}summary{cursor:pointer;font-weight:650}output{font-variant-numeric:tabular-nums}#status{min-height:24px}#workers section{background:#eaf1eb}#workers h2{margin:0 0 4px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.total{font-size:23px;font-weight:700}small{display:block}.entry{border-top:1px solid #d8e0d9;padding:10px 0;overflow-wrap:anywhere}
+</style>
+<main>
+<h1>Daily Time Tracker</h1>
+<p id="offline">Preparing offline access…</p>
+<section>
+<label for="job">Active job</label>
+<input id="job" maxlength="120" placeholder="Enter a job name">
+<div class="row"><span id="dayLabel">Daily billable</span><output class="total" id="daily"></output></div>
+<div class="row"><span>Job billable</span><output class="total" id="total"></output></div>
+<div id="workers"></div>
+<button class="primary" id="start">Start New Day</button>
+<button id="pause">Pause both</button>
+<button id="finish">Finish Day</button>
+<button id="undo">Undo last action</button>
+</section>
+<p id="status" role="status"></p>
+<details>
+<summary>History and corrections</summary>
+<div id="history"></div>
+<form id="manual">
+<h2 id="formTitle">Add past work</h2>
+<label>Worker<select id="worker"></select></label>
+<label>Workday<input type="date" id="date" required></label>
+<label>Start<input type="datetime-local" step="1" id="from" required></label>
+<label>End<input type="datetime-local" step="1" id="to" required></label>
+<label>Correction note<input id="note" required maxlength="500"></label>
+<button class="primary">Save entry</button>
+<button type="button" id="cancel" hidden>Cancel edit</button>
+</form>
+</details>
+<details>
+<summary>Backup and restore</summary>
+<p>Backups include private job records. Save them in Files.</p>
+<button id="export">Export JSON backup</button>
+<label for="import">Choose a backup to restore</label>
+<input id="import" type="file" accept=".json,application/json">
+</details>
+</main>
+<script src="app.js" defer></script>
