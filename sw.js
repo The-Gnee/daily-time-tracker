@@ -1,4 +1,4 @@
-const cacheName = 'daily-time-tracker-v1:' + self.registration.scope;
+const cacheName = 'daily-time-tracker-v2:' + self.registration.scope;
 const assets = ['./', './index.html', './app.js', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(cacheName).then(cache => cache.addAll(assets)));

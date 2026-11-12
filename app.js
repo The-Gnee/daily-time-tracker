@@ -86,22 +86,28 @@ workers.forEach(({name,rate}, i) => {
 
 function totals() {
   const now = Date.now();
-  const day = state.active ?? dayNow();
+  const day = dayNow();
   let daily = 0;
   let total = 0;
   const times = [0,0];
+  const byDay = new Map();
   for (const entry of state.entries) {
     const ms = Math.max(0,(entry.end ?? now) - entry.start);
-    const cents = ms * workers[entry.worker].rate / 3600000;
-    total += cents;
+    if (!byDay.has(entry.day)) byDay.set(entry.day, [0, 0]);
+    byDay.get(entry.day)[entry.worker] += ms;
     if (entry.day === day) {
-      daily += cents;
       times[entry.worker] += ms;
     }
   }
+  for (const [workday, durations] of byDay) {
+    const value = durations.reduce((sum, ms, worker) =>
+      sum + Math.floor(ms / 60000) * workers[worker].rate, 0);
+    total += value;
+    if (workday === day) daily = value;
+  }
   $('dayLabel').textContent = 'Daily billable · ' + day;
-  $('daily').textContent = money(daily);
-  $('total').textContent = money(total);
+  $('daily').textContent = money(daily / 60);
+  $('total').textContent = money(total / 60);
   times.forEach((ms,i) => $('time'+i).textContent = duration(ms));
 }
 
@@ -178,25 +184,29 @@ $('undo').onclick = () => {
 $('cancel').onclick = resetForm;
 $('manual').onsubmit = event => {
   event.preventDefault();
-  const worker = Number($('worker').value);
+  const selection = $('worker').value;
+  const selectedWorkers = selection === 'both' ? [0, 1] : [Number(selection)];
   const startTime = Date.parse($('from').value);
   const end = Date.parse($('to').value);
   const note = $('note').value.trim();
   const day = $('date').value;
-  if (!state.job || !note || !Number.isFinite(startTime) || end <= startTime || end > Date.now()) {
+  if (!state.job || !note || !Number.isFinite(startTime) || !Number.isFinite(end) || end <= startTime || end > Date.now()) {
     $('status').textContent = 'Enter a job, a past time range and a correction note.';
     return;
   }
   const old = state.entries[editing];
-  const entry = {worker, day, start:startTime, end, notes:[...(old?.notes ?? []), note]};
   const next = JSON.parse(JSON.stringify(state));
-  if (editing === null) next.entries.push(entry);
-  else next.entries[editing] = entry;
+  const entries = selectedWorkers.map(worker => ({
+    worker, day, start:startTime, end,
+    notes:[...(old && (selectedWorkers.length === 1 || old.worker === worker) ? old.notes : []), note]
+  }));
+  if (editing === null) next.entries.push(...entries);
+  else next.entries.splice(editing, 1, ...entries);
   if (!valid(next)) {
     $('status').textContent = 'Check the dates and make sure this worker’s time does not overlap another segment.';
     return;
   }
-  if (commit(next, state, 'Entry saved.')) resetForm();
+  if (commit(next, state, entries.length === 2 ? 'Entries saved for Graham and Hayden.' : 'Entry saved.')) resetForm();
 };
 
 $('export').onclick = () => {
