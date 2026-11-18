@@ -25,6 +25,7 @@
 <small>Switching jobs moves running timers to the selected job. Paused timers stay paused.</small>
 <div class="row"><span id="dayLabel">Today on this job</span><output class="total" id="daily"></output></div>
 <div class="row"><span>Selected job total</span><output class="total" id="total"></output></div>
+<small id="amountNote"></small>
 <div id="workers"></div>
 <button class="primary" id="start">Start New Day</button>
 <button id="pause">Pause both</button>
@@ -35,6 +36,11 @@
 <details>
 <summary>History and corrections</summary>
 <div id="history"></div>
+<details>
+<summary>Deleted history</summary>
+<p id="deletedEmpty">No deleted entries.</p>
+<div id="deletedHistory"></div>
+</details>
 <form id="manual">
 <h2 id="formTitle">Add past work</h2>
 <label>Worker<select id="worker"><option value="both" selected>Both</option></select></label>

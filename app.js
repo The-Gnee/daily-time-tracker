@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const workers = [{name:'Graham', rate:5875}, {name:'Hayden', rate:3625}];
 const key = 'daily-time-tracker:' + new URL('./', location.href).pathname;
-const initial = {job:'', jobs:[], archived:[], active:null, entries:[], lastFinished:null};
+const initial = {job:'', jobs:[], archived:[], deleted:[], active:null, entries:[], lastFinished:null};
 let state = initial;
 let previous = null;
 let editing = null;
@@ -9,8 +9,8 @@ let storageError = false;
 
 function migrate(data) {
   if (!data || typeof data.job !== 'string' || !Array.isArray(data.entries)) return data;
-  if ('jobs' in data) return {...data, archived:data.archived ?? []};
-  return {...data, jobs:data.job ? [data.job] : [], archived:[],
+  if ('jobs' in data) return {...data, archived:data.archived ?? [], deleted:data.deleted ?? []};
+  return {...data, jobs:data.job ? [data.job] : [], archived:[], deleted:[],
     entries:data.entries.map(entry => ({...entry, job:data.job})), lastFinished:null};
 }
 
@@ -24,12 +24,16 @@ function valid(data) {
     && data.archived.every(job => data.jobs.includes(job))
     && new Set(data.archived).size === data.archived.length
     && (data.job === '' || (data.jobs.includes(data.job) && !data.archived.includes(data.job)))
+    && Array.isArray(data.entries)
     && (data.job !== '' || !data.entries.some(entry => entry.end === null))
     && (data.lastFinished === null || date(data.lastFinished))
     && Array.isArray(data.entries) && data.entries.every(entry => entry && data.jobs.includes(entry.job) && workers[entry.worker]
       && Number.isInteger(entry.worker) && date(entry.day) && time(entry.start)
       && (entry.end === null ? entry.day === data.active && entry.job === data.job : time(entry.end) && entry.end >= entry.start)
       && Array.isArray(entry.notes) && entry.notes.every(note => typeof note === 'string'))
+    && Array.isArray(data.deleted) && data.deleted.every(item =>
+      item && time(item.deletedAt) && item.entry && item.entry.end !== null
+      && valid({...data, entries:[item.entry], deleted:[]}))
     && !data.entries.some((entry, i) => data.entries.slice(i + 1).some(other =>
       entry.worker === other.worker && entry.start < (other.end ?? Infinity)
       && other.start < (entry.end ?? Infinity)));
@@ -156,11 +160,17 @@ function totals() {
     }
   }
   for (const [workday, durations] of byDay) {
-    const value = billable(durations);
+    const value = state.entries.some(entry => entry.job === state.job && entry.end === null)
+      ? durations.reduce((sum, ms, worker) => sum + ms / 60000 * workers[worker].rate, 0)
+      : billable(durations);
     total += value;
     if (workday === day) daily = value;
   }
+  const live = state.entries.some(entry => entry.job === state.job && entry.end === null);
   $('dayLabel').textContent = 'Today on this job · ' + day;
+  $('amountNote').textContent = live
+    ? 'Live estimate updates each second. Reports bill completed minutes.'
+    : 'Billable totals use completed minutes.';
   $('daily').textContent = money(daily / 60);
   $('total').textContent = money(total / 60);
   times.forEach((ms,i) => $('time'+i).textContent = duration(ms));
@@ -236,9 +246,50 @@ function render() {
         $('note').value = '';
         $('from').focus();
       };
-      row.append(edit);
+      const remove = document.createElement('button');
+      remove.textContent = 'Delete';
+      remove.disabled = storageError;
+      remove.onclick = () => {
+        if (update((next, now) => {
+          const [entry] = next.entries.splice(index, 1);
+          next.deleted.push({entry, deletedAt:now});
+        }, 'Entry moved to deleted history.')) resetForm();
+      };
+      row.append(edit, remove);
       $('history').append(row);
     });
+  $('deletedHistory').replaceChildren();
+  state.deleted.map((item, index) => ({...item, index})).reverse().forEach(({entry, deletedAt, index}) => {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    row.textContent = entry.job + ' · ' + workers[entry.worker].name + ' · ' + entry.day;
+    const times = document.createElement('small');
+    times.textContent = new Date(entry.start).toLocaleString() + ' → ' + new Date(entry.end).toLocaleString();
+    const deleted = document.createElement('small');
+    deleted.textContent = 'Deleted ' + new Date(deletedAt).toLocaleString();
+    row.append(times, deleted);
+    for (const note of entry.notes) {
+      const text = document.createElement('small');
+      text.textContent = note;
+      row.append(text);
+    }
+    const restore = document.createElement('button');
+    restore.textContent = 'Restore';
+    restore.disabled = storageError;
+    restore.onclick = () => {
+      const next = JSON.parse(JSON.stringify(state));
+      const [item] = next.deleted.splice(index, 1);
+      next.entries.push(item.entry);
+      if (!valid(next)) {
+        $('status').textContent = 'Cannot restore because this worker has overlapping time. Correct the conflicting session first.';
+        return;
+      }
+      if (commit(next, state, 'Entry restored to ' + entry.job + '.')) resetForm();
+    };
+    row.append(restore);
+    $('deletedHistory').append(row);
+  });
+  $('deletedEmpty').hidden = state.deleted.length > 0;
   totals();
   renderReport();
 }
