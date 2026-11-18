@@ -1,19 +1,30 @@
 const $ = id => document.getElementById(id);
 const workers = [{name:'Graham', rate:5875}, {name:'Hayden', rate:3625}];
 const key = 'daily-time-tracker:' + new URL('./', location.href).pathname;
-const initial = {job:'', active:null, entries:[]};
+const initial = {job:'', jobs:[], active:null, entries:[], lastFinished:null};
 let state = initial;
 let previous = null;
 let editing = null;
 let storageError = false;
 
+function migrate(data) {
+  if (!data || typeof data.job !== 'string' || !Array.isArray(data.entries)) return data;
+  if ('jobs' in data) return data;
+  return {...data, jobs:data.job ? [data.job] : [],
+    entries:data.entries.map(entry => ({...entry, job:data.job})), lastFinished:null};
+}
+
 function valid(data) {
   const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const time = value => Number.isSafeInteger(value) && value > 0 && value <= Date.now();
   return data && typeof data.job === 'string' && (data.active === null || date(data.active))
-    && Array.isArray(data.entries) && data.entries.every(entry => entry && workers[entry.worker]
+    && Array.isArray(data.jobs) && data.jobs.every(job => typeof job === 'string' && job.trim())
+    && new Set(data.jobs).size === data.jobs.length
+    && (data.jobs.length ? data.jobs.includes(data.job) : data.job === '')
+    && (data.lastFinished === null || date(data.lastFinished))
+    && Array.isArray(data.entries) && data.entries.every(entry => entry && data.jobs.includes(entry.job) && workers[entry.worker]
       && Number.isInteger(entry.worker) && date(entry.day) && time(entry.start)
-      && (entry.end === null ? entry.day === data.active : time(entry.end) && entry.end >= entry.start)
+      && (entry.end === null ? entry.day === data.active && entry.job === data.job : time(entry.end) && entry.end >= entry.start)
       && Array.isArray(entry.notes) && entry.notes.every(note => typeof note === 'string'))
     && !data.entries.some((entry, i) => data.entries.slice(i + 1).some(other =>
       entry.worker === other.worker && entry.start < (other.end ?? Infinity)
@@ -23,6 +34,8 @@ function valid(data) {
 try {
   const saved = JSON.parse(localStorage.getItem(key));
   if (saved !== null) {
+    saved.state = migrate(saved.state);
+    saved.previous = migrate(saved.previous);
     if (!valid(saved.state) || (saved.previous !== null && !valid(saved.previous))) throw Error();
     ({state, previous} = saved);
   }
@@ -69,7 +82,7 @@ const running = worker => state.entries.some(entry => entry.worker === worker &&
 const stop = (next, now, worker) => next.entries.forEach(entry => {
   if (entry.end === null && (worker === undefined || entry.worker === worker)) entry.end = Math.max(now, entry.start);
 });
-const start = (next, now, worker) => next.entries.push({worker, day:next.active, start:now, end:null, notes:[]});
+const start = (next, now, worker) => next.entries.push({job:next.job, worker, day:next.active, start:now, end:null, notes:[]});
 
 workers.forEach(({name,rate}, i) => {
   const card = document.createElement('section');
@@ -84,6 +97,44 @@ workers.forEach(({name,rate}, i) => {
   };
 });
 
+function billable(durations) {
+  return durations.reduce((sum, ms, worker) =>
+    sum + Math.floor(ms / 60000) * workers[worker].rate, 0);
+}
+
+function renderReport() {
+  const day = $('reportDate').value;
+  const groups = new Map();
+  for (const entry of state.entries) {
+    if (entry.day !== day || entry.end === null) continue;
+    if (!groups.has(entry.job)) groups.set(entry.job, [0,0]);
+    groups.get(entry.job)[entry.worker] += entry.end - entry.start;
+  }
+  const report = $('reportRows');
+  report.replaceChildren();
+  let total = 0;
+  for (const [job, times] of groups) {
+    const value = billable(times);
+    total += value;
+    const row = document.createElement('div');
+    row.className = 'entry';
+    row.textContent = job + ' · ' + money(value / 60);
+    times.forEach((ms, i) => {
+      const worker = document.createElement('small');
+      const minutes = Math.floor(ms / 60000);
+      worker.textContent = workers[i].name + ' · ' + Math.floor(minutes / 60)
+        + ' h ' + minutes % 60 + ' min';
+      row.append(worker);
+    });
+    report.append(row);
+  }
+  $('reportTotal').textContent = groups.size
+    ? 'Total labour · ' + money(total / 60)
+    : 'No completed sessions for this date.';
+}
+
+$('reportDate').onchange = renderReport;
+
 function totals() {
   const now = Date.now();
   const day = dayNow();
@@ -92,6 +143,7 @@ function totals() {
   const times = [0,0];
   const byDay = new Map();
   for (const entry of state.entries) {
+    if (entry.job !== state.job) continue;
     const ms = Math.max(0,(entry.end ?? now) - entry.start);
     if (!byDay.has(entry.day)) byDay.set(entry.day, [0, 0]);
     byDay.get(entry.day)[entry.worker] += ms;
@@ -100,12 +152,11 @@ function totals() {
     }
   }
   for (const [workday, durations] of byDay) {
-    const value = durations.reduce((sum, ms, worker) =>
-      sum + Math.floor(ms / 60000) * workers[worker].rate, 0);
+    const value = billable(durations);
     total += value;
     if (workday === day) daily = value;
   }
-  $('dayLabel').textContent = 'Daily billable · ' + day;
+  $('dayLabel').textContent = 'Today on this job · ' + day;
   $('daily').textContent = money(daily / 60);
   $('total').textContent = money(total / 60);
   times.forEach((ms,i) => $('time'+i).textContent = duration(ms));
@@ -120,8 +171,12 @@ function resetForm() {
 }
 
 function render() {
+  $('job').replaceChildren(...(state.jobs.length
+    ? state.jobs.map(job => new Option(job, job))
+    : [new Option('Add a job to get started', '')]));
   $('job').value = state.job;
-  $('job').disabled = storageError || state.active !== null || state.entries.length > 0;
+  $('job').disabled = storageError || !state.jobs.length;
+  $('addJob').disabled = storageError;
   $('start').disabled = storageError || !state.job || state.active !== null;
   $('pause').disabled = storageError || !workers.some((_, i) => running(i));
   $('finish').disabled = storageError || state.active === null;
@@ -134,7 +189,7 @@ function render() {
   $('history').replaceChildren();
   state.entries.map((entry, index) => ({entry,index})).sort((a,b) => b.entry.start-a.entry.start)
     .forEach(({entry,index}) => {
-      if (entry.end === null) return;
+      if (entry.end === null || entry.job !== state.job) return;
       const row = document.createElement('div');
       row.className = 'entry';
       row.textContent = workers[entry.worker].name + ' · ' + entry.day + ' · ' + duration(entry.end-entry.start);
@@ -163,9 +218,29 @@ function render() {
       $('history').append(row);
     });
   totals();
+  renderReport();
 }
 
-$('job').onchange = () => update(next => {next.job = $('job').value.trim();}, 'Job saved.');
+function selectJob(job) {
+  if (!job || job === state.job) return;
+  const activeWorkers = workers.map((_, i) => i).filter(running);
+  if (update((next, now) => {
+    stop(next, now);
+    if (!next.jobs.includes(job)) next.jobs.push(job);
+    next.job = job;
+    activeWorkers.forEach(worker => start(next, now, worker));
+  }, 'Active job · ' + job)) resetForm();
+  else $('job').value = state.job;
+}
+
+$('job').onchange = () => selectJob($('job').value);
+$('newJob').onsubmit = event => {
+  event.preventDefault();
+  const job = $('jobName').value.trim();
+  if (!job) return;
+  selectJob(job);
+  if (state.job === job) $('newJob').reset();
+};
 $('start').onclick = () => {
   resetForm();
   update((next, now) => {
@@ -174,10 +249,18 @@ $('start').onclick = () => {
   }, 'Both timers started.');
 };
 $('pause').onclick = () => update((next, now) => stop(next, now), 'Both timers paused.');
-$('finish').onclick = () => update((next, now) => {
-  stop(next, now);
-  next.active = null;
-}, 'Day saved.');
+$('finish').onclick = () => {
+  const day = state.active;
+  if (update((next, now) => {
+    stop(next, now);
+    next.lastFinished = day;
+    next.active = null;
+  }, 'Day saved.')) {
+    $('reportDate').value = day;
+    $('dayReport').open = true;
+    renderReport();
+  }
+};
 $('undo').onclick = () => {
   if (commit(previous, null, 'Last action undone.')) resetForm();
 };
@@ -197,7 +280,7 @@ $('manual').onsubmit = event => {
   const old = state.entries[editing];
   const next = JSON.parse(JSON.stringify(state));
   const entries = selectedWorkers.map(worker => ({
-    worker, day, start:startTime, end,
+    job:old?.job ?? state.job, worker, day, start:startTime, end,
     notes:[...(old && (selectedWorkers.length === 1 || old.worker === worker) ? old.notes : []), note]
   }));
   if (editing === null) next.entries.push(...entries);
@@ -210,7 +293,7 @@ $('manual').onsubmit = event => {
 };
 
 $('export').onclick = () => {
-  const backup = new Blob([JSON.stringify({version:1, state}, null, 2)], {type:'application/json'});
+  const backup = new Blob([JSON.stringify({version:2, state}, null, 2)], {type:'application/json'});
   const url = URL.createObjectURL(backup);
   const link = document.createElement('a');
   link.href = url;
@@ -224,9 +307,14 @@ $('import').onchange = async () => {
   if (!file) return;
   try {
     const backup = JSON.parse(await file.text());
-    if (backup.version !== 1 || !valid(backup.state)) throw Error();
+    const restored = backup.version === 1 ? migrate(backup.state) : backup.state;
+    if (![1,2].includes(backup.version) || !valid(restored)) throw Error();
     if (confirm('Replace the records on this device with this backup?')) {
-      if (commit(backup.state, storageError ? null : state, 'Backup restored.', true)) resetForm();
+      if (commit(restored, storageError ? null : state, 'Backup restored.', true)) {
+        resetForm();
+        $('reportDate').value = state.lastFinished ?? dayNow();
+        renderReport();
+      }
     }
   } catch {
     $('status').textContent = 'This file is not a valid tracker backup.';
@@ -235,6 +323,7 @@ $('import').onchange = async () => {
 window.addEventListener('storage', event => {
   if (event.key === key || event.key === null) location.reload();
 });
+$('reportDate').value = state.lastFinished ?? dayNow();
 resetForm();
 render();
 setInterval(totals, 1000);

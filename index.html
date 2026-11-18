@@ -14,9 +14,15 @@
 <p id="offline">Preparing offline access…</p>
 <section>
 <label for="job">Active job</label>
-<input id="job" maxlength="120" placeholder="Enter a job name">
-<div class="row"><span id="dayLabel">Daily billable</span><output class="total" id="daily"></output></div>
-<div class="row"><span>Job billable</span><output class="total" id="total"></output></div>
+<select id="job"></select>
+<form id="newJob">
+<label for="jobName">New job name</label>
+<input id="jobName" maxlength="120" required>
+<button id="addJob">Add Job</button>
+</form>
+<small>Switching jobs moves running timers to the selected job. Paused timers stay paused.</small>
+<div class="row"><span id="dayLabel">Today on this job</span><output class="total" id="daily"></output></div>
+<div class="row"><span>Selected job total</span><output class="total" id="total"></output></div>
 <div id="workers"></div>
 <button class="primary" id="start">Start New Day</button>
 <button id="pause">Pause both</button>
@@ -37,6 +43,13 @@
 <button class="primary">Save entry</button>
 <button type="button" id="cancel" hidden>Cancel edit</button>
 </form>
+</details>
+<details id="dayReport">
+<summary>Daily report by job</summary>
+<label for="reportDate">Workday</label>
+<input type="date" id="reportDate">
+<div id="reportRows"></div>
+<p id="reportTotal"></p>
 </details>
 <details>
 <summary>Backup and restore</summary>
