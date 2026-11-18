@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const workers = [{name:'Graham', rate:5875}, {name:'Hayden', rate:3625}];
 const key = 'daily-time-tracker:' + new URL('./', location.href).pathname;
-const initial = {job:'', jobs:[], active:null, entries:[], lastFinished:null};
+const initial = {job:'', jobs:[], archived:[], active:null, entries:[], lastFinished:null};
 let state = initial;
 let previous = null;
 let editing = null;
@@ -9,8 +9,8 @@ let storageError = false;
 
 function migrate(data) {
   if (!data || typeof data.job !== 'string' || !Array.isArray(data.entries)) return data;
-  if ('jobs' in data) return data;
-  return {...data, jobs:data.job ? [data.job] : [],
+  if ('jobs' in data) return {...data, archived:data.archived ?? []};
+  return {...data, jobs:data.job ? [data.job] : [], archived:[],
     entries:data.entries.map(entry => ({...entry, job:data.job})), lastFinished:null};
 }
 
@@ -20,7 +20,11 @@ function valid(data) {
   return data && typeof data.job === 'string' && (data.active === null || date(data.active))
     && Array.isArray(data.jobs) && data.jobs.every(job => typeof job === 'string' && job.trim())
     && new Set(data.jobs).size === data.jobs.length
-    && (data.jobs.length ? data.jobs.includes(data.job) : data.job === '')
+    && Array.isArray(data.archived)
+    && data.archived.every(job => data.jobs.includes(job))
+    && new Set(data.archived).size === data.archived.length
+    && (data.job === '' || (data.jobs.includes(data.job) && !data.archived.includes(data.job)))
+    && (data.job !== '' || !data.entries.some(entry => entry.end === null))
     && (data.lastFinished === null || date(data.lastFinished))
     && Array.isArray(data.entries) && data.entries.every(entry => entry && data.jobs.includes(entry.job) && workers[entry.worker]
       && Number.isInteger(entry.worker) && date(entry.day) && time(entry.start)
@@ -171,20 +175,38 @@ function resetForm() {
 }
 
 function render() {
-  $('job').replaceChildren(...(state.jobs.length
-    ? state.jobs.map(job => new Option(job, job))
+  const available = state.jobs.filter(job => !state.archived.includes(job));
+  $('job').replaceChildren(...(available.length
+    ? available.map(job => new Option(job, job))
     : [new Option('Add a job to get started', '')]));
   $('job').value = state.job;
-  $('job').disabled = storageError || !state.jobs.length;
+  $('job').disabled = storageError || !available.length;
   $('addJob').disabled = storageError;
+  $('archiveJob').disabled = storageError || !state.job || workers.some((_, i) => running(i));
+  $('archivedJobs').replaceChildren();
+  for (const job of state.archived) {
+    const row = document.createElement('div');
+    row.className = 'entry';
+    const label = document.createElement('span');
+    label.textContent = job + ' ';
+    const restore = document.createElement('button');
+    restore.textContent = 'Restore to dropdown';
+    restore.disabled = storageError;
+    restore.onclick = () => update(next => {
+      next.archived = next.archived.filter(name => name !== job);
+      if (!next.job) next.job = job;
+    }, 'Job restored.');
+    row.append(label, restore);
+    $('archivedJobs').append(row);
+  }
   $('start').disabled = storageError || !state.job || state.active !== null;
   $('pause').disabled = storageError || !workers.some((_, i) => running(i));
-  $('finish').disabled = storageError || state.active === null;
+  $('finish').disabled = storageError || state.active === null || !state.job;
   $('undo').disabled = storageError || previous === null;
   $('export').disabled = storageError;
   workers.forEach((_, i) => {
     $('toggle'+i).textContent = running(i) ? 'Pause' : 'Resume';
-    $('toggle'+i).disabled = storageError || state.active === null;
+    $('toggle'+i).disabled = storageError || state.active === null || !state.job;
   });
   $('history').replaceChildren();
   state.entries.map((entry, index) => ({entry,index})).sort((a,b) => b.entry.start-a.entry.start)
@@ -223,6 +245,10 @@ function render() {
 
 function selectJob(job) {
   if (!job || job === state.job) return;
+  if (state.archived.includes(job)) {
+    $('status').textContent = 'That name belongs to an archived job. Use a new name, such as the client and project date.';
+    return;
+  }
   const activeWorkers = workers.map((_, i) => i).filter(running);
   if (update((next, now) => {
     stop(next, now);
@@ -232,6 +258,15 @@ function selectJob(job) {
   }, 'Active job · ' + job)) resetForm();
   else $('job').value = state.job;
 }
+
+$('archiveJob').onclick = () => {
+  if (!state.job || workers.some((_, i) => running(i))) return;
+  const job = state.job;
+  if (update(next => {
+    next.archived.push(job);
+    next.job = next.jobs.find(name => !next.archived.includes(name)) ?? '';
+  }, job + ' archived. Its hours remain in daily reports and backups.')) resetForm();
+};
 
 $('job').onchange = () => selectJob($('job').value);
 $('newJob').onsubmit = event => {
@@ -307,7 +342,7 @@ $('import').onchange = async () => {
   if (!file) return;
   try {
     const backup = JSON.parse(await file.text());
-    const restored = backup.version === 1 ? migrate(backup.state) : backup.state;
+    const restored = migrate(backup.state);
     if (![1,2].includes(backup.version) || !valid(restored)) throw Error();
     if (confirm('Replace the records on this device with this backup?')) {
       if (commit(restored, storageError ? null : state, 'Backup restored.', true)) {
