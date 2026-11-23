@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const workers = [{name:'Graham', rate:5875}, {name:'Hayden', rate:3625}];
 const key = 'daily-time-tracker:' + new URL('./', location.href).pathname;
-const initial = {job:'', jobs:[], archived:[], deleted:[], active:null, entries:[], lastFinished:null};
+const initial = {job:'', jobs:[], archived:[], deleted:[], active:null, entries:[], lastFinished:null, receiptCollection:'main'};
 let state = initial;
 let previous = null;
 let editing = null;
@@ -9,15 +9,16 @@ let storageError = false;
 
 function migrate(data) {
   if (!data || typeof data.job !== 'string' || !Array.isArray(data.entries)) return data;
-  if ('jobs' in data) return {...data, archived:data.archived ?? [], deleted:data.deleted ?? []};
+  if ('jobs' in data) return {...data, archived:data.archived ?? [], deleted:data.deleted ?? [], receiptCollection:data.receiptCollection ?? 'main'};
   return {...data, jobs:data.job ? [data.job] : [], archived:[], deleted:[],
-    entries:data.entries.map(entry => ({...entry, job:data.job})), lastFinished:null};
+    entries:data.entries.map(entry => ({...entry, job:data.job})), lastFinished:null, receiptCollection:'main'};
 }
 
 function valid(data) {
   const date = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value);
   const time = value => Number.isSafeInteger(value) && value > 0 && value <= Date.now();
   return data && typeof data.job === 'string' && (data.active === null || date(data.active))
+    && typeof data.receiptCollection === 'string' && /^[a-zA-Z0-9-]+$/.test(data.receiptCollection)
     && Array.isArray(data.jobs) && data.jobs.every(job => typeof job === 'string' && job.trim())
     && new Set(data.jobs).size === data.jobs.length
     && Array.isArray(data.archived)
@@ -213,7 +214,7 @@ function render() {
   $('pause').disabled = storageError || !workers.some((_, i) => running(i));
   $('finish').disabled = storageError || state.active === null || !state.job;
   $('undo').disabled = storageError || previous === null;
-  $('export').disabled = storageError;
+  $('export').disabled = storageError || typeof receiptRecords !== 'function';
   workers.forEach((_, i) => {
     $('toggle'+i).textContent = running(i) ? 'Pause' : 'Resume';
     $('toggle'+i).disabled = storageError || state.active === null || !state.job;
@@ -292,6 +293,7 @@ function render() {
   $('deletedEmpty').hidden = state.deleted.length > 0;
   totals();
   renderReport();
+  if (typeof renderReceipts === 'function') renderReceipts();
 }
 
 function selectJob(job) {
@@ -378,34 +380,6 @@ $('manual').onsubmit = event => {
   if (commit(next, state, entries.length === 2 ? 'Entries saved for Graham and Hayden.' : 'Entry saved.')) resetForm();
 };
 
-$('export').onclick = () => {
-  const backup = new Blob([JSON.stringify({version:2, state}, null, 2)], {type:'application/json'});
-  const url = URL.createObjectURL(backup);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'daily-time-tracker-' + dayNow() + '.json';
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
-};
-$('import').onchange = async () => {
-  const file = $('import').files[0];
-  $('import').value = '';
-  if (!file) return;
-  try {
-    const backup = JSON.parse(await file.text());
-    const restored = migrate(backup.state);
-    if (![1,2].includes(backup.version) || !valid(restored)) throw Error();
-    if (confirm('Replace the records on this device with this backup?')) {
-      if (commit(restored, storageError ? null : state, 'Backup restored.', true)) {
-        resetForm();
-        $('reportDate').value = state.lastFinished ?? dayNow();
-        renderReport();
-      }
-    }
-  } catch {
-    $('status').textContent = 'This file is not a valid tracker backup.';
-  }
-};
 window.addEventListener('storage', event => {
   if (event.key === key || event.key === null) location.reload();
 });

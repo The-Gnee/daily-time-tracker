@@ -7,7 +7,8 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Daily Time Tracker</title>
 <style>
-*{box-sizing:border-box}body{margin:0 auto;padding:24px 18px;max-width:570px;background:#f4f6f2;color:#152e28;font:16px system-ui,sans-serif}h1{font-size:28px;margin:8px 0}h2{font-size:20px}section,details{background:white;border-radius:16px;padding:16px;margin:12px 0}button,input,select{font:inherit;min-height:44px;padding:8px;border:1px solid #aab9b0;border-radius:8px}button{background:#e6eee8;color:#152e28;cursor:pointer;margin:3px 0}button:disabled{opacity:.45}button.primary{background:#152e28;color:white}input,select{width:100%;margin:4px 0 10px}label{display:block}summary{cursor:pointer;font-weight:650}output{font-variant-numeric:tabular-nums}#status{min-height:24px}#workers section{background:#eaf1eb}#workers h2{margin:0 0 4px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.total{font-size:23px;font-weight:700}small{display:block}.entry{border-top:1px solid #d8e0d9;padding:10px 0;overflow-wrap:anywhere}
+*{box-sizing:border-box}body{margin:0 auto;padding:24px 18px;max-width:570px;background:#f4f6f2;color:#152e28;font:16px system-ui,sans-serif}h1{font-size:28px;margin:8px 0}h2{font-size:20px}section,details{background:white;border-radius:16px;padding:16px;margin:12px 0}button,input,select,textarea{font:inherit;min-height:44px;padding:8px;border:1px solid #aab9b0;border-radius:8px}button{background:#e6eee8;color:#152e28;cursor:pointer;margin:3px 0}button:disabled{opacity:.45}button.primary{background:#152e28;color:white}input,select,textarea{width:100%;margin:4px 0 10px}label{display:block}summary{cursor:pointer;font-weight:650}output{font-variant-numeric:tabular-nums}#status{min-height:24px}#workers section{background:#eaf1eb}#workers h2{margin:0 0 4px}.row{display:flex;justify-content:space-between;align-items:center;gap:8px}.total{font-size:23px;font-weight:700}small{display:block}.entry{border-top:1px solid #d8e0d9;padding:10px 0;overflow-wrap:anywhere}
+textarea{min-height:90px}img.receipt-preview{max-width:100%;max-height:420px;object-fit:contain}a{color:#17483d}button{margin-right:5px}fieldset{border:0;padding:0;min-width:0}
 </style>
 <main>
 <h1>Daily Time Tracker</h1>
@@ -64,6 +65,46 @@
 <div id="reportRows"></div>
 <p id="reportTotal"></p>
 </details>
+<details id="receiptsPanel">
+<summary>Receipts and camera</summary>
+<p>Photograph a receipt or choose an image. Review the scan results before saving.</p>
+<p>Photos and receipts stay on this device and are included in JSON backups. Scanning needs an internet connection to load the scanner.</p>
+<form id="receiptForm">
+<fieldset id="receiptFields">
+<h2 id="receiptTitle">Add receipt</h2>
+<label>Job<select id="receiptJob" required></select></label>
+<label>Take receipt photo<input id="receiptCamera" type="file" accept="image/*" capture="environment"></label>
+<label>Choose receipt image<input id="receiptFile" type="file" accept="image/*"></label>
+<img id="receiptPreview" class="receipt-preview" alt="Receipt photo" hidden>
+<button id="scanReceipt" type="button" disabled>Scan receipt</button>
+<p id="scanStatus" role="status"></p>
+<label>Supplier<input id="receiptVendor" maxlength="160" required></label>
+<label>Receipt date<input id="receiptDate" type="date" required></label>
+<label>Subtotal ($)<input id="receiptSubtotal" inputmode="decimal" placeholder="Optional"></label>
+<label>GST / HST ($)<input id="receiptGST" inputmode="decimal" placeholder="Optional"></label>
+<label>PST ($)<input id="receiptPST" inputmode="decimal" placeholder="Optional"></label>
+<label>Total paid, including tax ($)<input id="receiptTotal" inputmode="decimal" required></label>
+<label>Card last four<input id="receiptCard" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="Optional"></label>
+<label>Category<input id="receiptCategory" maxlength="100" placeholder="Materials, fuel, supplies…"></label>
+<label>Notes<textarea id="receiptNotes" maxlength="2000"></textarea></label>
+<details><summary>Scanned text</summary>
+<label>Review or correct scan text<textarea id="receiptText" maxlength="20000"></textarea></label>
+<button type="button" id="applyScan">Apply text to fields</button></details>
+<button class="primary" id="saveReceipt">Save receipt</button>
+<button type="button" id="cancelReceipt">Clear / cancel edit</button>
+</fieldset></form>
+<p id="receiptStatus" role="status"></p>
+<h2>Saved receipts</h2>
+<label>Show receipts for<select id="receiptFilter"></select></label>
+<div id="receiptList"></div>
+</details>
+<details>
+<summary>Excel export by job</summary>
+<label>Job<select id="excelJob"></select></label>
+<p>Includes job totals, daily labour, completed time sessions, and receipt details with card last four. Receipt totals include tax. Photos are included in JSON backups.</p>
+<button id="excelExport">Download Excel report</button>
+<p id="excelStatus" role="status"></p>
+</details>
 <details>
 <summary>Backup and restore</summary>
 <p>Backups include private job records. Save them in Files.</p>
@@ -73,3 +114,5 @@
 </details>
 </main>
 <script src="app.js" defer></script>
+<script src="excel.js" defer></script>
+<script src="receipts.js" defer></script>
