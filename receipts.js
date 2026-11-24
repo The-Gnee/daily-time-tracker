@@ -4,6 +4,10 @@ let receiptPhoto = '';
 let receiptUpdatedAt = null;
 let receiptBusy = false;
 let receiptRender = 0;
+let receiptImage = null;
+let receiptRotation = 0;
+let receiptPreviewGeneration = 0;
+const receiptManualFields = new Set();
 
 function openReceipts() {
   if (!receiptDatabase) receiptDatabase = new Promise((resolve, reject) => {
@@ -160,16 +164,102 @@ async function renderReceipts() {
   }
 }
 
-function previewReceipt() {
+async function previewReceipt() {
+  const generation = ++receiptPreviewGeneration;
   $('receiptPreview').hidden = !receiptPhoto;
-  $('receiptPreview').src = receiptPhoto;
+  $('receiptCropControls').hidden = !receiptPhoto;
   $('scanReceipt').disabled = !receiptPhoto || receiptBusy;
+  if (!receiptPhoto) { receiptImage = null; return; }
+  if (receiptImage?.src !== receiptPhoto) {
+    const photo = receiptPhoto;
+    const image = new Image();
+    image.src = photo;
+    try { await image.decode(); } catch {
+      $('scanStatus').textContent = 'Could not prepare this image for scanning. Try choosing it again.';
+      return;
+    }
+    if (generation !== receiptPreviewGeneration || receiptPhoto !== photo) return;
+    receiptImage = image;
+    receiptRotation = 0;
+    findReceiptEdges();
+  }
+  drawReceiptPreview();
 }
+
+function orientedReceiptCanvas() {
+  const canvas = document.createElement('canvas');
+  const swapped = receiptRotation % 180 !== 0;
+  canvas.width = swapped ? receiptImage.naturalHeight : receiptImage.naturalWidth;
+  canvas.height = swapped ? receiptImage.naturalWidth : receiptImage.naturalHeight;
+  const context = canvas.getContext('2d');
+  context.translate(canvas.width / 2, canvas.height / 2);
+  context.rotate(receiptRotation * Math.PI / 180);
+  context.drawImage(receiptImage, -receiptImage.naturalWidth / 2, -receiptImage.naturalHeight / 2);
+  return canvas;
+}
+
+function setReceiptCrop(bounds) {
+  for (const [edge,value] of Object.entries(bounds)) $('crop' + edge[0].toUpperCase() + edge.slice(1)).value = value;
+}
+
+function findReceiptEdges() {
+  if (!receiptImage) return;
+  const image = orientedReceiptCanvas();
+  const sample = document.createElement('canvas');
+  sample.width = 240;
+  sample.height = Math.max(1,Math.round(image.height * sample.width / image.width));
+  const context = sample.getContext('2d');
+  context.drawImage(image,0,0,sample.width,sample.height);
+  setReceiptCrop(receiptPaperBounds(context.getImageData(0,0,sample.width,sample.height).data,sample.width,sample.height));
+}
+
+function receiptScanCanvas(enhance = false, threshold = false) {
+  const source = orientedReceiptCanvas();
+  const left = Number($('cropLeft').value) / 100, right = Number($('cropRight').value) / 100;
+  const top = Number($('cropTop').value) / 100, bottom = Number($('cropBottom').value) / 100;
+  const width = Math.max(1,source.width * (right-left)), height = Math.max(1,source.height * (bottom-top));
+  const scale = enhance ? Math.min(4,Math.max(1,1000 / width),6000 / height) : 1;
+  const border = enhance ? 20 : 0;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * scale) + border * 2;
+  canvas.height = Math.round(height * scale) + border * 2;
+  const context = canvas.getContext('2d');
+  context.fillStyle = 'white'; context.fillRect(0,0,canvas.width,canvas.height);
+  context.imageSmoothingQuality = 'high';
+  context.drawImage(source,source.width*left,source.height*top,width,height,border,border,canvas.width-border*2,canvas.height-border*2);
+  if (enhance) {
+    const pixels = context.getImageData(0,0,canvas.width,canvas.height);
+    enhanceReceiptPixels(pixels.data);
+    if (threshold) thresholdReceiptPixels(pixels.data,canvas.width,canvas.height);
+    context.putImageData(pixels,0,0);
+  }
+  return canvas;
+}
+
+function drawReceiptPreview() {
+  if (!receiptImage) return;
+  for (const edge of ['Left','Right','Top','Bottom']) $('crop'+edge+'Value').textContent = $('crop'+edge).value + '%';
+  $('receiptPreview').src = receiptScanCanvas().toDataURL('image/jpeg',0.9);
+}
+
+for (const edge of ['Left','Right','Top','Bottom']) $('crop'+edge).oninput = () => {
+  const other = {Left:'Right',Right:'Left',Top:'Bottom',Bottom:'Top'}[edge];
+  const value = Number($('crop'+edge).value), opposite = Number($('crop'+other).value);
+  $('crop'+edge).value = edge === 'Left' || edge === 'Top' ? Math.min(value,opposite-5) : Math.max(value,opposite+5);
+  drawReceiptPreview();
+};
+$('findReceipt').onclick = () => { findReceiptEdges(); drawReceiptPreview(); };
+$('resetCrop').onclick = () => { setReceiptCrop({left:0,right:100,top:0,bottom:100}); drawReceiptPreview(); };
+$('rotateReceipt').onclick = () => {
+  receiptRotation = (receiptRotation + 90) % 360;
+  findReceiptEdges(); drawReceiptPreview();
+};
 
 function resetReceipt() {
   receiptEditing = null;
   receiptUpdatedAt = null;
   receiptPhoto = '';
+  receiptManualFields.clear();
   $('receiptForm').reset();
   $('receiptTitle').textContent = 'Add receipt';
   $('receiptDate').value = dayNow();
@@ -184,6 +274,7 @@ function editReceipt(receipt) {
   receiptEditing = receipt.id;
   receiptUpdatedAt = receipt.updatedAt;
   receiptPhoto = receipt.photo;
+  for (const field of ['vendor','date','subtotal','gst','pst','total','card']) receiptManualFields.add(field);
   $('receiptTitle').textContent = 'Edit receipt';
   $('receiptJob').value = receipt.job;
   for (const [field, property] of [['Vendor','vendor'],['Date','date'],['Card','card'],['Category','category'],['Notes','notes'],['Text','text']]) $('receipt' + field).value = receipt[property];
@@ -207,7 +298,8 @@ async function preparePhoto(file) {
     context.fillStyle = 'white';
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    const photo = canvas.toDataURL('image/jpeg', 0.88);
+    let photo = canvas.toDataURL('image/jpeg', 0.97);
+    if (photo.length > 3000000) photo = canvas.toDataURL('image/jpeg', 0.88);
     if (photo.length > 3000000) throw Error('This image is too large. Try a closer, cropped photo.');
     return photo;
   } finally { URL.revokeObjectURL(url); }
@@ -226,20 +318,25 @@ for (const id of ['receiptCamera', 'receiptFile']) $(id).onchange = async () => 
     receiptBusy = false;
     $('receiptFields').disabled = false;
     $(id).value = '';
-    previewReceipt();
+    await previewReceipt();
   }
 };
 
 function parseReceiptText(text) {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const fields = {vendor:lines[0]?.slice(0,160) ?? ''};
+  const fields = {};
+  const merchantLines = lines.slice(0,12).filter(line => /[A-Za-z]{4}/.test(line)
+    && (line.match(/[A-Za-z]/g)?.length ?? 0) / line.length > 0.6
+    && !/\b(?:welcome|you're|thank|customer|transaction|subtotal|tax|gst|visa|date|account)\b/i.test(line));
+  const merchant = merchantLines.find(line => /\b(?:hardware|home cent(?:er|re)|supplies|supply|store|market|ltd|inc)\b/i.test(line)) ?? merchantLines[0];
+  if (merchant) fields.vendor = merchant.slice(0,160);
   for (const line of lines) {
     const amounts = [...line.matchAll(/(?:\$\s*)?(\d[\d,]*\.\d{2})(?!\d)/g)];
     const amount = amounts.at(-1)?.[1].replace(/,/g, '');
-    if (amount && /\bsub\s*total\b/i.test(line)) fields.subtotal = amount;
+    if (amount && /\b(?:sub\s*total|s[uw]b?t[o0]tal)\b/i.test(line)) fields.subtotal = amount;
     if (amount && /\b(?:GST|HST)\b/i.test(line)) fields.gst = amount;
     if (amount && /\bPST\b/i.test(line)) fields.pst = amount;
-    if (amount && /\b(?:grand\s+total|total|amount\s+(?:paid|due))\b/i.test(line) && !/sub\s*total|tax|savings|discount/i.test(line)) fields.total = amount;
+    if (amount && /\b(?:grand\s+total|[t1i][o0][t1i]al|amount\s+(?:paid|due))\b/i.test(line) && !/sub\s*total|tax|savings|discount/i.test(line)) fields.total = amount;
     const card = line.match(/(?:[*xX•]{2,}[\s*-]*|\b(?:ending(?:\s+in)?|last\s*(?:four|4))\s*[:#-]?\s*)(\d{4})(?!\d)/i);
     if (card) fields.card = card[1];
     const date = line.match(/\b(20\d{2})[-/.](0?[1-9]|1[0-2])[-/.](0?[1-9]|[12]\d|3[01])\b/);
@@ -247,18 +344,49 @@ function parseReceiptText(text) {
     const usDate = line.match(/\b(0?[1-9]|1[0-2])[-/](0?[1-9]|[12]\d|3[01])[-/](20\d{2})\b/);
     if (usDate) fields.date = usDate[3] + '-' + usDate[1].padStart(2,'0') + '-' + usDate[2].padStart(2,'0');
   }
+  // Some receipt layouts place the tax amount just above or below its label.
+  for (const [label,property] of [[/\b(?:GST|HST)\b/i,'gst'],[/\bPST\b/i,'pst']]) {
+    if (fields[property]) continue;
+    const index = lines.findIndex(line => label.test(line) && !/\b(?:registration|reg|number)\b|#/i.test(line));
+    if (index < 0) continue;
+    for (const adjacent of [lines[index-1],lines[index+1]]) {
+      const amount = adjacent?.match(/^\$?\s*(\d[\d,]*\.\d{2})\s*[A-Za-z\W]{0,4}$/);
+      if (amount) { fields[property] = amount[1].replace(/,/g,''); break; }
+    }
+  }
+  if (!fields.total) {
+    const amounts = lines.filter(line => /\b(?:visa|mastercard|amex|debit)\b/i.test(line))
+      .map(line => [...line.matchAll(/(\d[\d,]*\.\d{2})/g)].at(-1)?.[1]?.replace(/,/g,''))
+      .filter(Boolean);
+    const repeated = amounts.find(amount => amounts.filter(value => value === amount).length > 1);
+    const maskedPayment = lines.find(line => /\b(?:visa|mastercard|amex|debit)\b/i.test(line) && /[xX*•oO]{3}/.test(line));
+    const maskedAmount = maskedPayment && [...maskedPayment.matchAll(/(\d[\d,]*\.\d{2})/g)].at(-1)?.[1]?.replace(/,/g,'');
+    const accountPayment = lines.find(line => /\b(?:acct|account)\s*:\s*(?:visa|mastercard|amex|debit)\b/i.test(line));
+    const accountAmount = accountPayment && [...accountPayment.matchAll(/(\d[\d,]*\.\d{2})/g)].at(-1)?.[1]?.replace(/,/g,'');
+    if (repeated || maskedAmount || accountAmount) fields.total = repeated || maskedAmount || accountAmount;
+  }
   return fields;
 }
 
-function applyReceiptText() {
+const receiptFieldIds = {vendor:'Vendor',date:'Date',subtotal:'Subtotal',gst:'GST',pst:'PST',total:'Total',card:'Card'};
+for (const [property,field] of Object.entries(receiptFieldIds)) $('receipt'+field).oninput = () => receiptManualFields.add(property);
+
+function applyReceiptText(replace = false) {
   const fields = parseReceiptText($('receiptText').value);
   for (const [property, value] of Object.entries(fields)) {
-    const field = {vendor:'Vendor',date:'Date',subtotal:'Subtotal',gst:'GST',pst:'PST',total:'Total',card:'Card'}[property];
-    $('receipt' + field).value = value;
+    if (!replace && receiptManualFields.has(property)) continue;
+    $('receipt' + receiptFieldIds[property]).value = value;
   }
 }
 $('applyScan').onclick = () => {
-  applyReceiptText();
+  const fields = parseReceiptText($('receiptText').value);
+  if (!fields.total && !fields.subtotal && !fields.card) {
+    $('scanStatus').textContent = 'This text is not readable enough to fill the fields. Adjust the scan area or enter the details manually.';
+    return;
+  }
+  const hasCorrections = Object.keys(fields).some(property => receiptManualFields.has(property));
+  if (hasCorrections && !confirm('Replace your edited fields with values from the scanned text?')) return;
+  applyReceiptText(true);
   $('scanStatus').textContent = 'Suggested fields applied. Review every field against the receipt before saving.';
 };
 
@@ -288,7 +416,7 @@ function loadScanner() {
 }
 
 $('scanReceipt').onclick = async () => {
-  if (!receiptPhoto || receiptBusy) return;
+  if (!receiptPhoto || !receiptImage || receiptBusy) return;
   receiptBusy = true;
   $('receiptFields').disabled = true;
   $('scanStatus').textContent = 'Loading scanner. The first scan may take a minute.';
@@ -302,10 +430,25 @@ $('scanReceipt').onclick = async () => {
     }});
     pending.then(created => { if (finished) created.terminate().catch(() => {}); }).catch(() => {});
     worker = await scanWithTimeout(pending);
-    const result = await scanWithTimeout(worker.recognize(receiptPhoto));
+    await worker.setParameters({tessedit_pageseg_mode:'6', user_defined_dpi:'300'});
+    const image = receiptScanCanvas(true).toDataURL('image/png');
+    let result = await scanWithTimeout(worker.recognize(image));
+    if (result.data.confidence < 60) {
+      await worker.setParameters({tessedit_pageseg_mode:'3'});
+      const retryImage = receiptScanCanvas(true,true).toDataURL('image/png');
+      const retry = await scanWithTimeout(worker.recognize(retryImage));
+      if (retry.data.confidence > result.data.confidence) result = retry;
+    }
     $('receiptText').value = result.data.text.slice(0,20000);
+    const fields = parseReceiptText($('receiptText').value);
+    if (result.data.confidence < 45 || !fields.total && !fields.subtotal && !fields.card) {
+      $('scanStatus').textContent = 'The scan is unclear. Open Adjust scan area / rotate, remove the background, check the receipt is upright, and try again. You can also enter the fields manually.';
+      $('receiptCropControls').open = true;
+      return;
+    }
     applyReceiptText();
-    $('scanStatus').textContent = 'Scan complete. Review the supplier, date, tax, total and card last four before saving. You can edit every field.';
+    $('scanStatus').textContent = (!fields.subtotal || !fields.gst || !fields.card ? 'Partial scan. ' : 'Scan complete. ')
+      + 'Review the supplier, date, tax, total and card last four before saving. Fill any missing fields from the receipt.';
   } catch {
     $('scanStatus').textContent = 'Scanning is unavailable. Check your connection or enter the fields manually. The photo can still be saved.';
   } finally {
